@@ -2,7 +2,7 @@ import re
 
 
 def dia_horario_regex(texto):
-    regex = r"([a-zA-Z]+)\sdas\s(\d{2}:\d{2}\sàs\s\d{2}:\d{2}),\s([a-zA-Z ]+)"
+    regex = r"([a-zA-Z]+)\sdas\s(\d{2}:\d{2}\sàs\s\d{2}:\d{2}),\s*sala\s*([A-Z]-\d+-\d+)\s*,\s*([a-zA-Z ]+)"
 
     matches = re.findall(regex, texto)
 
@@ -11,7 +11,8 @@ def dia_horario_regex(texto):
         result.append({
             "dia_semana": match[0],
             "horario": match[1],
-            "tipo_recorrencia": match[2].strip()
+            "sala": match[2],
+            "tipo_recorrencia": match[3].strip()
         })
 
     return result
