@@ -1,6 +1,12 @@
 from django.core.exceptions import ObjectDoesNotExist
 from app.models import Professor, Materia, RelacaoMateriaHorarioProfessor, RelacaoAlunoMateria
 import pandas as pd
+import os
+import django
+
+os.environ.setdefault('DJANGO_SETTINGS_MODULE', 'projeto.settings')
+django.setup()
+import apoio.interpretador_regex as ir
 
 class PopularBanco:
     def __init__(self, caminho_turmas, caminho_salas):
@@ -14,6 +20,7 @@ class PopularBanco:
         # Seleciona as linhas da 2ª em diante e as 3 primeiras colunas
         turmas = turmas.iloc[3:, 0:3]
         turmas = turmas.reset_index(drop=True)
+        turmas['CÓDIGO TURMA'] = turmas['CÓDIGO TURMA'].astype(str)
         return turmas
     
     def formata_salas(self, arquivo):
@@ -33,17 +40,23 @@ class PopularBanco:
 
     def popular_banco(self):
         # Popula a tabela Professor
-        for professor in self.df_salas['PROFESSOR'].unique():
-            try:
-                professor_obj = Professor.objects.get(nome=professor)
-            except ObjectDoesNotExist:
-                professor_obj = Professor(nome=professor)
-                professor_obj.save()
+        for coluna in ['DOCENTE TEORIA', 'DOCENTE PRÁTICA', 'DOCENTE TEORIA 2', 'DOCENTE PRÁTICA 2']:
+            for professor in self.df_salas[coluna].unique():
+                try:
+                    professor_obj = Professor.objects.get(nome=professor)
+                except ObjectDoesNotExist:
+                    if professor == None or professor.strip() == '' or professor == 'nan.0':
+                        continue
+                    professor_obj = Professor(nome=professor)
+                    professor_obj.save()
 
         dict_campus = {'SA': 'Santo André', 'SB': 'São Bernardo do Campo'}
         # Popula a tabela Materia
         for turma in self.df_turmas['CÓDIGO TURMA'].unique():
-            materia_info = self.df_turmas[self.df_turmas['CÓDIGO TURMA'] == turma].iloc[0]
+            if len(self.df_turmas[self.df_turmas['CÓDIGO TURMA'] == turma]) > 0:
+                materia_info = self.df_turmas[self.df_turmas['CÓDIGO TURMA'] == turma].iloc[0]
+            else:
+                print("Index out of bounds: ", turma)
             turma = turma.strip()
             try:
                 materia_obj = Materia.objects.get(codigo_turma=turma)
@@ -56,26 +69,34 @@ class PopularBanco:
         for _, row in self.df_salas.iterrows():
             try:
                 materia_obj = Materia.objects.get(codigo_turma=row['CÓDIGO TURMA'])
-                professor_obj = Professor.objects.get(nome=row['PROFESSOR'])
-                #Adicionar lógica que pega o campo 'TEORIA' ou 'PRÁTICA' e  transforma 
-                relacao_obj = RelacaoMateriaHorarioProfessor(codigo_turma=materia_obj, id_professor=professor_obj, dia_semana=row['DIA'], horario=row['HORÁRIO'], sala=row['SALA'], tipo_semanal=row['TIPO'])
-                relacao_obj.save()
+                horarios = []
+                if len(row['TEORIA'].strip()) > 2:
+                    professor = row['DOCENTE TEORIA'] if row['DOCENTE TEORIA'] == None else row['DOCENTE TEORIA 2']
+                    horarios += ir.dia_horario_regex(row['TEORIA'], professor)
+
+                if len(row['PRÁTICA'].strip()) > 2:
+                    professor = row['DOCENTE PRÁTICA'] if row['DOCENTE PRÁTICA'] == None else row['DOCENTE PRÁTICA 2']
+                    horarios += ir.dia_horario_regex(row['PRÁTICA'], professor)
+
+                for horario in horarios:
+                    relacao_obj = RelacaoMateriaHorarioProfessor(codigo_turma=materia_obj, id_professor=horario['professor'],
+                                                                 dia_semana=horario['dia_semana'], horario=horario['horario'],
+                                                                 sala=horario['sala'], tipo_semanal=horario['tipo_recorrencia'])
+                    relacao_obj.save()
             except ObjectDoesNotExist:
+                print('Materia não encontrada')
                 pass
 
         # Popula a tabela RelacaoAlunoMateria
         for _, row in self.df_turmas.iterrows():
-            # Cria ou pega o professor a partir do nome
-            professor, created = Professor.objects.get_or_create(nome=row['PROFESSOR'])
-            # Cria ou pega a materia a partir do codigo_turma
-            materia, created = Materia.objects.get_or_create(codigo_turma=row['CÓDIGO TURMA'], turma=row['TURMA'],
-                                                                campus=row['CAMPUS'], turno=row['TURNO'])
-            # Cria o objeto de RelacaoMateriaHorarioProfessor
-            RelacaoMateriaHorarioProfessor.objects.create(codigo_turma=materia, id_professor=professor,
-                                                            dia_semana=row['DIA'], horario=row['HORARIO'], sala=row['SALA'],
-                                                            tipo_semanal=row['TIPO'])
-            # Cria o objeto de RelacaoAlunoMateria
-            RelacaoAlunoMateria.objects.create(codigo_turma=materia, ra=row['RA'])
+            # Itera pelas linhas do dataframe pegando o codigo da turma e o RA do aluno
+            try:
+                materia_obj = Materia.objects.get(codigo_turma=row['CÓDIGO TURMA'])
+                relacao_obj = RelacaoAlunoMateria(codigo_turma=materia_obj, ra=row['RA'])
+                relacao_obj.save()
+            except ObjectDoesNotExist:
+                print('Erro ao inserir aluno na turma')
+                pass
 
 
 
@@ -84,12 +105,7 @@ def main():
     turmas = base_path + 'ajuste_2023_1_deferidos_pos_ajuste .xlsx'
     salas = base_path + 'turmas_salas_docentes_2023_1.xlsx'
     puxa_dados = PopularBanco(turmas, salas)
-    print(puxa_dados.df_turmas.columns)
-    # variacoes_teoria = puxa_dados.df_salas['TEORIA'].unique()
-    # variacoes_pratica = puxa_dados.df_salas['PRÁTICA'].unique()
-    # print(variacoes_teoria)
-    # print(variacoes_pratica)
-    # puxa_dados.puxa_turmas()
-    
+    puxa_dados.popular_banco()
+
 if __name__ == '__main__':
     main()
